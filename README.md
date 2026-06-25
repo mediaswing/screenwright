@@ -114,3 +114,34 @@ desktop layer uses `eframe`/`egui` (UI), `rfd` (native file dialogs),
 ```sh
 cargo test
 ```
+
+## Disclaimer
+
+screenwright includes an optional feature that calls a third-party AI provider
+(Claude or ChatGPT) with *your* own API key. **You are solely responsible for
+the screenplays you write and for any AI-generated prompt output you choose to
+use.** AI output may be inaccurate, derivative, or unsuitable for your purpose;
+review it before relying on it, and ensure your use complies with the chosen
+provider's terms of service. screenwright does not claim any rights over your
+content and is provided "as is", without warranty of any kind.
+
+## License
+
+screenwright is released under the [MIT License](LICENSE). This license applies
+to screenwright's own source code only.
+
+### Third-party licenses
+
+screenwright depends on a number of open-source crates (see `Cargo.toml`), each
+under its own license. When distributing a built binary, bundle a notice listing
+those dependencies and their licenses. The simplest way to generate one:
+
+```sh
+cargo install cargo-about
+cargo about init                              # one-time: creates about.toml + template
+cargo about generate about.hbs > THIRD_PARTY_LICENSES.html
+```
+
+Include the generated `THIRD_PARTY_LICENSES.html` (or a plain-text equivalent)
+alongside each release. Alternatively, `cargo install cargo-license && cargo
+license` prints a quick summary of dependency licenses.
