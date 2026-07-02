@@ -125,9 +125,12 @@ fn parse_dialogue_block(lines: &[&str], mut idx: usize, sp: &mut Screenplay) -> 
 
 /// Parse leading `Key: Value` title-page lines. Returns the body start index.
 fn parse_title_page(lines: &[&str], sp: &mut Screenplay) -> usize {
-    // A title page only exists if the very first line is a `key:` pair.
+    // A title page only exists if the very first line is a recognized title
+    // key. Requiring a known key stops a scene-opening line that merely looks
+    // like `Key: value` — e.g. `FADE IN:` or `Later: he runs.` — from being
+    // swallowed into the title page and vanishing from the body.
     let first = lines.first().map(|l| l.trim()).unwrap_or("");
-    if !is_title_key_line(first) {
+    if !is_title_page_start(first) {
         return 0;
     }
 
@@ -225,8 +228,21 @@ fn strip_action_marker(line: &str) -> String {
     line.strip_prefix('!').unwrap_or(line).to_string()
 }
 
-fn is_title_key_line(line: &str) -> bool {
-    key_colon_pos(line).is_some()
+/// Recognized Fountain title-page keys (case-insensitive). Used only to decide
+/// whether a file opens with a title page at all; once one is confirmed, any
+/// custom `Key: value` line inside the block is still captured.
+const TITLE_KEYS: &[&str] = &[
+    "title", "credit", "author", "authors", "source", "notes", "draft date",
+    "date", "contact", "copyright", "revision",
+];
+
+/// Whether `line` is a title-page key line whose key is a recognized title key,
+/// i.e. a plausible start of a title page block.
+fn is_title_page_start(line: &str) -> bool {
+    match key_colon_pos(line) {
+        Some(colon) => TITLE_KEYS.contains(&line[..colon].trim().to_lowercase().as_str()),
+        None => false,
+    }
 }
 
 /// Position of the title-page `:` separator, if this looks like `Key: ...`.
@@ -245,27 +261,33 @@ fn key_colon_pos(line: &str) -> Option<usize> {
 }
 
 /// Remove `/* boneyard */` blocks and `[[ note ]]` spans from the source.
+///
+/// Scans by `char` (not raw bytes) so multi-byte UTF-8 — accented names, curly
+/// quotes, em dashes — passes through intact.
 fn strip_boneyard_and_notes(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
-    let bytes = source.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            // Skip to closing '*/'.
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
+    let mut chars = source.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '/' && chars.peek() == Some(&'*') {
+            // Skip to the closing '*/' (or end of input if unterminated).
+            chars.next();
+            while let Some(c) = chars.next() {
+                if c == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    break;
+                }
             }
-            i += 2;
-        } else if bytes[i] == b'[' && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b']' && bytes[i + 1] == b']') {
-                i += 1;
+        } else if c == '[' && chars.peek() == Some(&'[') {
+            // Skip to the closing ']]' (or end of input if unterminated).
+            chars.next();
+            while let Some(c) = chars.next() {
+                if c == ']' && chars.peek() == Some(&']') {
+                    chars.next();
+                    break;
+                }
             }
-            i += 2;
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            out.push(c);
         }
     }
     out
@@ -300,12 +322,35 @@ mod tests {
     }
 
     #[test]
+    fn transition_opening_is_not_a_title_page() {
+        // `FADE IN:` looks like `Key: value` but must stay in the body rather
+        // than being consumed as a title-page field.
+        let src = "FADE IN:\n\nINT. HOUSE - DAY\n\nAction.\n";
+        let sp = parse(src);
+        assert!(sp.title_page.is_empty(), "FADE IN: was swallowed as a title page");
+        assert_eq!(sp.body[0], Element::Action("FADE IN:".into()));
+        assert_eq!(sp.body[1], Element::SceneHeading("INT. HOUSE - DAY".into()));
+    }
+
+    #[test]
     fn forced_heading_and_transition() {
         let src = ".A QUIET ROOM\n\n> FADE OUT <\n\nCUT TO:\n";
         let sp = parse(src);
         assert_eq!(sp.body[0], Element::SceneHeading("A QUIET ROOM".into()));
         assert_eq!(sp.body[1], Element::Centered("FADE OUT".into()));
         assert_eq!(sp.body[2], Element::Transition("CUT TO:".into()));
+    }
+
+    #[test]
+    fn preserves_non_ascii_text() {
+        let src = "Café — “oui” [[cut]] naïve.\n";
+        let sp = parse(src);
+        match &sp.body[0] {
+            // The `[[cut]]` note is removed; the surrounding text (including the
+            // multi-byte é, —, “ ” and ï) is preserved byte-for-byte.
+            Element::Action(t) => assert_eq!(t, "Café — “oui”  naïve."),
+            other => panic!("expected action, got {other:?}"),
+        }
     }
 
     #[test]
