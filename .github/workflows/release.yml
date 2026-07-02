@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Needed for softprops/action-gh-release to create the release and upload assets.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: screenwright
+            asset: screenwright-linux-x86_64.tar.gz
+          - os: macos-latest
+            bin: screenwright
+            asset: screenwright-macos-aarch64.tar.gz
+          - os: windows-latest
+            bin: screenwright.exe
+            asset: screenwright-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      # eframe (winit) and rfd (GTK file dialogs) need system libraries on Linux.
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar -czf "${{ matrix.asset }}" -C target/release "${{ matrix.bin }}"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path "target/release/${{ matrix.bin }}" -DestinationPath "${{ matrix.asset }}"
+
+      # Each platform job appends its archive to the release for the pushed tag,
+      # creating the release (with auto-generated notes) on the first upload.
+      - name: Publish to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
